@@ -1,12 +1,12 @@
 # CLI WeChat Bridge 
-**命令行工具的微信桥接**
+**命令行工具的微信桥接**：将微信接入本地 AI 编码工作流的桥接工具。现在支持微信接入Codex的体验接近原生。
 
 > Platform support:
 > - Windows: primary validated native platform.
 > - Linux/macOS: native support is available for `codex`, `claude`, and `shell`.
 > - Non-Windows `shell` defaults to `pwsh`, then `bash`, `zsh`, and `sh`.
 
-将微信接入本地 AI 编码工作流的桥接工具。
+
 
 本项目用于桥接微信消息与本地运行的 [`codex`](https://github.com/openai/codex)、[`Claude Code`](https://code.claude.com/docs/en/overview) 或持久化 `powershell.exe` 会话，并将本地输出、审批请求与运行状态同步回微信。当前实现以 `codex` 工作流为中心展开，重点是保留本地原生终端体验，并在此基础上提供微信侧的远程输入、结果回流与状态同步能力。
 
@@ -119,7 +119,7 @@ wechat-codex
 
 ![alt text](src/image-2.png)
 
-然后即可：（允许双向交互！）
+然后即可：（允许双向交互！windows 和 linux 均实测成功）
 
 - 在微信中发送普通文本
 - 在本地 `wechat-codex` 中继续原生交互
@@ -127,6 +127,8 @@ wechat-codex
 - 让微信自动跟随当前本地线程
 
 ![alt text](src/image-3.png)
+
+![alt text](src/image-4.png)
 
 如果你第一次使用本项目，建议优先从 `codex` 模式开始。当前仓库中，`codex` 是实现最完整、会话一致性与本地/远程衔接能力最完善的适配器路径。
 
@@ -505,4 +507,5 @@ bun test
 - [qrcode-terminal](https://github.com/gtanner/qrcode-terminal)：终端二维码输出
 
 ## License
+
 MIT
