@@ -1,7 +1,7 @@
 {
-  "name": "claude-code-wechat-channel",
+  "name": "cli-wechat-bridge",
   "version": "0.1.0",
-  "description": "WeChat MCP server via the official ilink API",
+  "description": "CLI WeChat Bridge for Codex, Claude Code, and PowerShell over WeChat",
   "type": "module",
   "private": true,
   "bin": {

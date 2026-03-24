@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "claude-code-wechat-channel",
+      "name": "cli-wechat-bridge",
       "dependencies": {
         "@anthropic-ai/sdk": "^0.80.0",
         "@modelcontextprotocol/sdk": "^1.27.1",

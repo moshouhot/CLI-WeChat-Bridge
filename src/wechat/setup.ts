@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 /**
- * WeChat channel setup.
+ * CLI WeChat Bridge setup.
  *
- * Run this before starting the channel server:
+ * Run this before starting CLI WeChat Bridge:
  *   bun run setup
  */
 
