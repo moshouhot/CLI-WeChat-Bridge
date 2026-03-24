@@ -282,7 +282,7 @@ describe("adapter-aware message formatting", () => {
   });
 
   test("formats final reply and failure messages by adapter", () => {
-    expect(formatFinalReplyMessage("claude", "Done")).toBe("Claude final reply:\nDone");
+    expect(formatFinalReplyMessage("claude", "Done")).toBe("Done");
     expect(formatTaskFailedMessage("claude", "Boom")).toBe("Claude task failed:\nBoom");
   });
 });

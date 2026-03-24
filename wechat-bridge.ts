@@ -288,7 +288,7 @@ async function main(): Promise<void> {
 
       if (
         activeTask &&
-        options.adapter !== "codex" &&
+        options.adapter === "shell" &&
         adapterState.status === "busy" &&
         Date.now() - lastSignalAt >= 30_000
       ) {
@@ -384,6 +384,13 @@ function wireAdapterEvents(params: {
           log(`${event.status}: ${event.message}`);
           stateStore.appendLog(`${event.status}: ${event.message}`);
         }
+        break;
+      case "notice":
+        updateLastOutputAt();
+        stateStore.appendLog(`${event.level}_notice: ${truncatePreview(event.text)}`);
+        void outputBatcher.flushNow().then(async () => {
+          await queueWechatMessage(authorizedUserId, event.text);
+        });
         break;
       case "approval_required":
         void outputBatcher.flushNow().then(async () => {

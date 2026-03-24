@@ -52,6 +52,10 @@ function writeTextFile(filePath: string, content: string): void {
   fs.writeFileSync(filePath, content, "utf-8");
 }
 
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 afterEach(() => {
   process.env.HOME = originalHome;
   process.env.USERPROFILE = originalUserProfile;
@@ -589,6 +593,161 @@ describe("Claude CLI compatibility", () => {
       resumeConversationId: "resume-conversation-456",
       transcriptPath: "/tmp/resume-conversation-456.jsonl",
     });
+  });
+
+  test("suppresses raw Claude PTY output and waits for structured approval hooks", () => {
+    const adapter = createBridgeAdapter({
+      kind: "claude",
+      command: "claude",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    }) as any;
+    const events: Array<{ type: string }> = [];
+    adapter.setEventSink((event: { type: string }) => events.push(event));
+    adapter.renderLocalOutput = () => undefined;
+    adapter.hasAcceptedInput = true;
+    adapter.state.status = "busy";
+    adapter.state.activeTurnOrigin = "wechat";
+
+    adapter.handleData("Thinking...\r\nReviewing files...\r\n");
+
+    expect(events).toEqual([]);
+
+    adapter.handleData("Do you want to allow this? (y/n)\r\n");
+
+    expect(events).toEqual([]);
+
+    adapter.handleClaudePermissionRequest(
+      "request-123",
+      {
+        tool_name: "Bash",
+        tool_input: {
+          command: "dir",
+        },
+      },
+      {
+        end() {},
+        destroy() {},
+      } as any,
+    );
+
+    expect(events.map((event) => event.type)).toEqual(["status", "approval_required"]);
+    expect(adapter.pendingApproval).toMatchObject({
+      summary: "Claude permission is required for Bash.",
+      commandPreview: "Bash: dir",
+      confirmInput: "y\r",
+      denyInput: "n\r",
+    });
+
+    adapter.flushPendingClaudeHookApprovals();
+  });
+
+  test("emits a single notice for long-running Claude WeChat turns", async () => {
+    const adapter = createBridgeAdapter({
+      kind: "claude",
+      command: "claude",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    }) as any;
+    const events: Array<{ type: string; text?: string; level?: string }> = [];
+    adapter.setEventSink((event: { type: string; text?: string; level?: string }) =>
+      events.push(event),
+    );
+    adapter.renderLocalOutput = () => undefined;
+    adapter.pty = {
+      pid: 1234,
+      write() {},
+      kill() {},
+    };
+    adapter.workingNoticeDelayMs = 5;
+
+    await adapter.sendInput("Review the failing Claude bridge tests");
+    await wait(20);
+
+    const noticeEvents = events.filter((event) => event.type === "notice");
+    expect(noticeEvents).toHaveLength(1);
+    expect(noticeEvents[0]).toMatchObject({
+      level: "info",
+      text: "Claude is still working on:\nReview the failing Claude bridge tests",
+    });
+
+    await wait(20);
+    expect(events.filter((event) => event.type === "notice")).toHaveLength(1);
+
+    await adapter.dispose();
+  });
+
+  test("cancels the pending Claude working notice when a structured approval is requested", async () => {
+    const adapter = createBridgeAdapter({
+      kind: "claude",
+      command: "claude",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    }) as any;
+    const events: Array<{ type: string }> = [];
+    adapter.setEventSink((event: { type: string }) => events.push(event));
+    adapter.renderLocalOutput = () => undefined;
+    adapter.pty = {
+      pid: 1234,
+      write() {},
+      kill() {},
+    };
+    adapter.workingNoticeDelayMs = 20;
+
+    await adapter.sendInput("Run the risky shell command");
+    adapter.handleData("Do you want to allow this? (y/n)\r\n");
+    adapter.handleClaudePermissionRequest(
+      "request-456",
+      {
+        tool_name: "Bash",
+        tool_input: {
+          command: "rm -rf build",
+        },
+      },
+      {
+        end() {},
+        destroy() {},
+      } as any,
+    );
+    await wait(35);
+
+    expect(events.filter((event) => event.type === "notice")).toHaveLength(0);
+    expect(events.filter((event) => event.type === "approval_required")).toHaveLength(1);
+
+    adapter.flushPendingClaudeHookApprovals();
+    await adapter.dispose();
+  });
+
+  test("cancels the pending Claude working notice once the final reply arrives", async () => {
+    const adapter = createBridgeAdapter({
+      kind: "claude",
+      command: "claude",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    }) as any;
+    const events: Array<{ type: string }> = [];
+    adapter.setEventSink((event: { type: string }) => events.push(event));
+    adapter.renderLocalOutput = () => undefined;
+    adapter.pty = {
+      pid: 1234,
+      write() {},
+      kill() {},
+    };
+    adapter.workingNoticeDelayMs = 20;
+
+    await adapter.sendInput("Summarize the repo state");
+    adapter.handleClaudeStop({ last_assistant_message: "Done." });
+    await wait(35);
+
+    expect(events.filter((event) => event.type === "notice")).toHaveLength(0);
+    expect(events.map((event) => event.type)).toEqual([
+      "status",
+      "status",
+      "final_reply",
+      "task_complete",
+    ]);
+
+    await adapter.dispose();
   });
 });
 

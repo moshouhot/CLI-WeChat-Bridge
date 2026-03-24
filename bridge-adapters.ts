@@ -34,6 +34,7 @@ import type {
   ApprovalRequest,
   BridgeAdapter,
   BridgeAdapterKind,
+  BridgeNoticeLevel,
   BridgeResumeSessionCandidate,
   BridgeResumeThreadCandidate,
   BridgeAdapterState,
@@ -152,6 +153,7 @@ const CODEX_SESSION_LOCAL_MIRROR_FALLBACK_WINDOW_MS = 15_000;
 const CLAUDE_HOOK_LISTEN_HOST = "127.0.0.1";
 const CLAUDE_HELP_PROBE_TIMEOUT_MS = 5_000;
 const CLAUDE_HOOK_APPROVAL_TIMEOUT_MS = 15_000;
+const CLAUDE_WECHAT_WORKING_NOTICE_DELAY_MS = 12_000;
 const DEFAULT_UNIX_SHELL_CANDIDATES = ["pwsh", "bash", "zsh", "sh"] as const;
 const POSIX_SHELL_NAMES = new Set(["bash", "zsh", "sh", "dash", "ksh"]);
 const CLAUDE_FLAG_SUPPORT_CACHE = new Map<string, boolean>();
@@ -4419,12 +4421,18 @@ class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   private runtimeSessionId: string | null;
   private resumeConversationId: string | null;
   private transcriptPath: string | null;
+  private pendingCliApprovalHints:
+    | Pick<ApprovalRequest, "confirmInput" | "denyInput">
+    | null = null;
   private pendingInjectedInputs: PendingInjectedClaudePrompt[] = [];
   private localTerminalInputListener: ((chunk: string | Buffer) => void) | null = null;
   private resizeListener: (() => void) | null = null;
   private settingsFilePath: string | null = null;
   private readonly pendingHookApprovals = new Map<string, ClaudePendingHookApproval>();
   private recoveringInvalidResume = false;
+  private workingNoticeTimer: ReturnType<typeof setTimeout> | null = null;
+  private workingNoticeSent = false;
+  private workingNoticeDelayMs = CLAUDE_WECHAT_WORKING_NOTICE_DELAY_MS;
 
   constructor(options: AdapterOptions) {
     super(options);
@@ -4478,9 +4486,12 @@ class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     this.currentPreview = truncatePreview(text);
     this.state.lastInputAt = nowIso();
     this.state.activeTurnOrigin = "wechat";
+    this.pendingCliApprovalHints = null;
+    this.clearWechatWorkingNotice(true);
     this.setStatus("busy");
     this.writeToPty(text.replace(/\r?\n/g, "\r"));
     this.writeToPty("\r");
+    this.armWechatWorkingNotice();
   }
 
   override async listResumeSessions(_limit = 10): Promise<BridgeResumeSessionCandidate[]> {
@@ -4503,12 +4514,16 @@ class ClaudeCompanionAdapter extends AbstractPtyAdapter {
       return false;
     }
 
+    this.clearWechatWorkingNotice(true);
+    this.pendingCliApprovalHints = null;
     this.flushPendingClaudeHookApprovals();
     this.writeToPty("\u0003");
     return true;
   }
 
   override async reset(): Promise<void> {
+    this.clearWechatWorkingNotice(true);
+    this.pendingCliApprovalHints = null;
     this.runtimeSessionId = null;
     this.resumeConversationId = null;
     this.transcriptPath = null;
@@ -4531,6 +4546,8 @@ class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     if (this.pendingApproval.requestId) {
       const handled = this.respondToClaudeHookApproval(this.pendingApproval.requestId, action);
       if (handled) {
+        this.clearWechatWorkingNotice();
+        this.pendingCliApprovalHints = null;
         this.pendingApproval = null;
         this.state.pendingApproval = null;
         this.state.pendingApprovalOrigin = undefined;
@@ -4547,6 +4564,8 @@ class ClaudeCompanionAdapter extends AbstractPtyAdapter {
       );
     }
 
+    this.clearWechatWorkingNotice();
+    this.pendingCliApprovalHints = null;
     this.pendingApproval = null;
     this.state.pendingApproval = null;
     this.state.pendingApprovalOrigin = undefined;
@@ -4557,6 +4576,8 @@ class ClaudeCompanionAdapter extends AbstractPtyAdapter {
 
   override async dispose(): Promise<void> {
     this.detachLocalTerminal();
+    this.clearWechatWorkingNotice(true);
+    this.pendingCliApprovalHints = null;
     this.flushPendingClaudeHookApprovals();
     await super.dispose();
     await this.stopHookServer();
@@ -4601,6 +4622,7 @@ class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     this.state.lastOutputAt = nowIso();
     const approval = detectCliApproval(text);
     if (approval) {
+      this.clearWechatWorkingNotice();
       if (this.pendingApproval) {
         this.pendingApproval = {
           ...this.pendingApproval,
@@ -4609,15 +4631,10 @@ class ClaudeCompanionAdapter extends AbstractPtyAdapter {
         };
         this.state.pendingApproval = this.pendingApproval;
       } else {
-        this.pendingApproval = approval;
-        this.state.pendingApproval = approval;
-        this.state.pendingApprovalOrigin = this.state.activeTurnOrigin;
-        this.setStatus("awaiting_approval", "Claude approval is required.");
-        this.emit({
-          type: "approval_required",
-          request: approval,
-          timestamp: nowIso(),
-        });
+        this.pendingCliApprovalHints = {
+          confirmInput: approval.confirmInput,
+          denyInput: approval.denyInput,
+        };
       }
       return;
     }
@@ -4625,16 +4642,12 @@ class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     if (!this.hasAcceptedInput) {
       return;
     }
-
-    this.emit({
-      type: "stdout",
-      text,
-      timestamp: nowIso(),
-    });
   }
 
   protected override handleExit(exitCode: number | undefined): void {
     this.detachLocalTerminal();
+    this.clearWechatWorkingNotice(true);
+    this.pendingCliApprovalHints = null;
     void this.stopHookServer();
     if (this.recoveringInvalidResume && !this.shuttingDown) {
       this.clearCompletionTimer();
@@ -4858,6 +4871,61 @@ class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     }
   }
 
+  private armWechatWorkingNotice(): void {
+    this.clearWechatWorkingNotice();
+    if (
+      this.workingNoticeSent ||
+      !this.hasAcceptedInput ||
+      this.state.status !== "busy" ||
+      this.pendingApproval ||
+      this.state.activeTurnOrigin !== "wechat"
+    ) {
+      return;
+    }
+
+    this.workingNoticeTimer = setTimeout(() => {
+      this.workingNoticeTimer = null;
+      if (
+        this.workingNoticeSent ||
+        !this.hasAcceptedInput ||
+        this.state.status !== "busy" ||
+        this.pendingApproval ||
+        this.state.activeTurnOrigin !== "wechat"
+      ) {
+        return;
+      }
+
+      this.workingNoticeSent = true;
+      this.emitClaudeNotice(`Claude is still working on:\n${this.currentPreview}`);
+    }, this.workingNoticeDelayMs);
+    this.workingNoticeTimer.unref?.();
+  }
+
+  private clearWechatWorkingNotice(resetSent = false): void {
+    if (this.workingNoticeTimer) {
+      clearTimeout(this.workingNoticeTimer);
+      this.workingNoticeTimer = null;
+    }
+    if (resetSent) {
+      this.workingNoticeSent = false;
+    }
+  }
+
+  private emitClaudeNotice(text: string, level: BridgeNoticeLevel = "info"): void {
+    const normalized = normalizeOutput(text).trim();
+    if (!normalized) {
+      return;
+    }
+
+    this.state.lastOutputAt = nowIso();
+    this.emit({
+      type: "notice",
+      text: normalized,
+      level,
+      timestamp: nowIso(),
+    });
+  }
+
   private handleClaudeHookEnvelope(params: {
     requestId: string;
     rawPayload: string;
@@ -4970,6 +5038,8 @@ class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     this.currentPreview = truncatePreview(prompt);
     this.state.lastInputAt = nowIso();
     this.state.activeTurnOrigin = "local";
+    this.pendingCliApprovalHints = null;
+    this.clearWechatWorkingNotice(true);
     this.setStatus("busy");
     this.emit({
       type: "mirrored_user_input",
@@ -4985,6 +5055,8 @@ class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     }
 
     this.recoveringInvalidResume = true;
+    this.clearWechatWorkingNotice(true);
+    this.pendingCliApprovalHints = null;
     this.flushPendingClaudeHookApprovals();
     this.pendingApproval = null;
     this.state.pendingApproval = null;
@@ -5000,11 +5072,10 @@ class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     this.state.lastSessionSwitchAt = undefined;
     this.state.lastSessionSwitchSource = undefined;
     this.state.lastSessionSwitchReason = undefined;
-    this.emit({
-      type: "stdout",
-      text: `Saved Claude conversation ${failedResumeConversationId} is no longer available. Starting a fresh Claude session.`,
-      timestamp: nowIso(),
-    });
+    this.emitClaudeNotice(
+      `Saved Claude conversation ${failedResumeConversationId} is no longer available. Starting a fresh Claude session.`,
+      "warning",
+    );
 
     try {
       await super.reset();
@@ -5018,6 +5089,7 @@ class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     payload: ClaudeHookPayload,
     socket: net.Socket,
   ): void {
+    this.clearWechatWorkingNotice();
     this.flushPendingClaudeHookApprovals();
     const timer = setTimeout(() => {
       this.respondToClaudeHook(socket, requestId);
@@ -5033,9 +5105,11 @@ class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     this.pendingApproval = {
       ...request,
       requestId,
-      confirmInput: this.pendingApproval?.confirmInput,
-      denyInput: this.pendingApproval?.denyInput,
+      confirmInput:
+        this.pendingApproval?.confirmInput ?? this.pendingCliApprovalHints?.confirmInput,
+      denyInput: this.pendingApproval?.denyInput ?? this.pendingCliApprovalHints?.denyInput,
     };
+    this.pendingCliApprovalHints = null;
     this.state.pendingApproval = this.pendingApproval;
     this.state.pendingApprovalOrigin = this.state.activeTurnOrigin;
     this.setStatus("awaiting_approval", "Claude approval is required.");
@@ -5047,6 +5121,8 @@ class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   }
 
   private handleClaudeStop(payload: { last_assistant_message?: string }): void {
+    this.clearWechatWorkingNotice(true);
+    this.pendingCliApprovalHints = null;
     this.flushPendingClaudeHookApprovals();
     this.pendingApproval = null;
     this.state.pendingApproval = null;
@@ -5072,6 +5148,8 @@ class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     error_details?: string;
     last_assistant_message?: string;
   }): void {
+    this.clearWechatWorkingNotice(true);
+    this.pendingCliApprovalHints = null;
     this.flushPendingClaudeHookApprovals();
     this.pendingApproval = null;
     this.state.pendingApproval = null;

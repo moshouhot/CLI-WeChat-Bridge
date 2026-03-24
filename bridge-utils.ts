@@ -407,6 +407,9 @@ export function formatFinalReplyMessage(
   adapter: BridgeAdapterKind,
   text: string,
 ): string {
+  if (adapter === "claude") {
+    return text;
+  }
   const label = adapter === "codex" ? "Codex" : adapter === "claude" ? "Claude" : adapter;
   return `${label} final reply:\n${text}`;
 }

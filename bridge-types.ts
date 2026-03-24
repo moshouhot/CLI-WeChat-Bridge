@@ -18,6 +18,8 @@ export type BridgeWorkerStatus =
   | "stopped"
   | "error";
 
+export type BridgeNoticeLevel = "info" | "warning";
+
 export type ApprovalSource = "shell" | "cli";
 
 export type ApprovalRequest = {
@@ -108,6 +110,12 @@ export type BridgeEvent =
       type: "status";
       status: BridgeWorkerStatus;
       message?: string;
+      timestamp: string;
+    }
+  | {
+      type: "notice";
+      text: string;
+      level: BridgeNoticeLevel;
       timestamp: string;
     }
   | {
