@@ -127,6 +127,19 @@ wechat-codex
 
 如果你第一次使用本项目，建议优先从 `codex` 模式开始。当前仓库中，`codex` 是实现最完整、会话一致性与本地/远程衔接能力最完善的适配器路径。
 
+如果你更希望用**单命令入口**快速启动，也可以直接使用：
+
+```bash
+wechat-codex-start
+```
+
+它会：
+
+- 复用当前目录已存在的 bridge
+- 或自动结束其他目录的旧 bridge，并在当前目录后台启动新的 `wechat-bridge-codex`
+- 等待本地 endpoint 就绪
+- 然后自动进入 `wechat-codex`
+
 ### 5. 启动其他模式（暂待完善）
 
 `claude`：
@@ -186,6 +199,7 @@ wechat-bridge-shell
 ```bash
 wechat-bridge-codex
 wechat-codex
+wechat-codex-start
 wechat-bridge-claude
 wechat-bridge-shell
 ```
@@ -196,11 +210,33 @@ wechat-bridge-shell
 bun run setup
 bun run bridge:codex
 bun run codex:panel
+bun run codex:start
 bun run bridge:claude
 bun run bridge:shell
 bun run bridge:bun -- --adapter codex
 bun run test
 ```
+
+### Windows 右键脚本（仓库内版本）
+
+仓库内提供了一组便于维护的 Windows 右键菜单脚本，位置如下：
+
+```text
+windows-context-menu/
+```
+
+当前提供：
+
+- `安装Terminal→wechat-codex-start右键.py`
+- `卸载Terminal→wechat-codex-start右键.py`
+
+这组脚本会：
+
+- 在资源管理器目录背景或文件夹右键中添加入口
+- 打开 Windows Terminal
+- 在当前目录直接执行 `wechat-codex-start`
+
+也就是说，右键菜单本身不再重复实现 bridge / panel 编排逻辑，而是统一复用项目内的单命令启动器。
 
 ### Bridge CLI 参数
 
@@ -234,6 +270,18 @@ wechat-codex --cwd D:\work\my-project
 
 - `--cwd <path>`：显式连接该目录对应的 bridge endpoint
 
+### `wechat-codex-start` 参数
+
+```bash
+wechat-codex-start --cwd D:\work\my-project
+```
+
+支持参数：
+
+- `--cwd <path>`：指定工作目录
+- `--profile <name-or-path>`：传递给 bridge 适配器
+- `--timeout-ms <ms>`：等待 bridge endpoint 的最长时间
+
 ## 微信侧支持的指令
 
 | 指令 | 说明 |
@@ -256,6 +304,8 @@ wechat-codex --cwd D:\work\my-project
 - `wechat-codex` 负责本地可见 Codex 面板
 
 这种结构的目的是将微信桥接与本地可见面板分离，从而尽可能保留本地终端的原生交互。
+
+如果你只是想快速进入工作状态，也可以用 `wechat-codex-start` 作为单命令启动器；它不会替代双终端结构本身，只是把“先起 bridge、再起 panel”的步骤封装起来。
 
 ### 线程规则
 
@@ -372,6 +422,12 @@ Codex 的正常会话历史仍由 Codex 自身维护，默认保存在：
 
 1. 先在目标目录启动 `wechat-bridge-codex`
 2. 再在同一目录启动 `wechat-codex`
+
+或者直接：
+
+```bash
+wechat-codex-start
+```
 
 ### 2. 全局命令不存在
 

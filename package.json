@@ -8,6 +8,7 @@
     "wechat-bridge": "./bin/wechat-bridge.mjs",
     "wechat-bridge-codex": "./bin/wechat-bridge-codex.mjs",
     "wechat-codex": "./bin/wechat-codex.mjs",
+    "wechat-codex-start": "./bin/wechat-codex-start.mjs",
     "wechat-bridge-claude": "./bin/wechat-bridge-claude.mjs",
     "wechat-bridge-shell": "./bin/wechat-bridge-shell.mjs"
   },
@@ -18,6 +19,7 @@
     "bridge": "node --no-warnings --experimental-strip-types wechat-bridge.ts",
     "bridge:codex": "node --no-warnings --experimental-strip-types wechat-bridge.ts --adapter codex",
     "codex:panel": "node --no-warnings --experimental-strip-types codex-panel.ts",
+    "codex:start": "node --no-warnings --experimental-strip-types codex-start.ts",
     "bridge:claude": "node --no-warnings --experimental-strip-types wechat-bridge.ts --adapter claude",
     "bridge:shell": "node --no-warnings --experimental-strip-types wechat-bridge.ts --adapter shell",
     "bridge:bun": "bun wechat-bridge.ts",
