@@ -46,6 +46,12 @@ const {
   shouldIncludeClaudeNoAltScreen,
 } = shared;
 
+const CLAUDE_COMPACT_OUTPUT_LINE_RE =
+  /^Compacted(?:\s*\(.*full summary.*\))?$/i;
+const CLAUDE_COMPACT_FAILURE_RE =
+  /Error:\s*Error during compaction:|(?:^|\b)API Error:|\b(?:compact|compaction)\s+failed\b|^Error:/i;
+const CLAUDE_COMPACT_DEDUP_MS = 2_000;
+
 export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   private hookServer: net.Server | null = null;
   private hookPort: number | null = null;
@@ -65,6 +71,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   private workingNoticeTimer: ReturnType<typeof setTimeout> | null = null;
   private workingNoticeSent = false;
   private workingNoticeDelayMs = CLAUDE_WECHAT_WORKING_NOTICE_DELAY_MS;
+  private lastCompactCompletionAtMs = 0;
 
   constructor(options: AdapterOptions) {
     super(options);
@@ -273,6 +280,16 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     }
 
     this.state.lastOutputAt = nowIso();
+    if (this.shouldTreatClaudeOutputAsCompactCompletion(text)) {
+      this.completeClaudeCompact();
+      return;
+    }
+    const compactFailure = this.extractClaudeCompactFailure(text);
+    if (compactFailure) {
+      this.failClaudeTurn(compactFailure);
+      return;
+    }
+
     const approval = detectCliApproval(text);
     if (approval) {
       this.clearWechatWorkingNotice();
@@ -566,6 +583,129 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     });
   }
 
+  private shouldTreatClaudeOutputAsCompactCompletion(text: string): boolean {
+    if (
+      this.state.status !== "busy" &&
+      this.state.status !== "awaiting_approval" &&
+      !this.hasAcceptedInput
+    ) {
+      return false;
+    }
+
+    return normalizeOutput(text)
+      .split("\n")
+      .some((line) => CLAUDE_COMPACT_OUTPUT_LINE_RE.test(line.trim()));
+  }
+
+  private isCompactCommandActive(): boolean {
+    const preview = normalizeOutput(this.currentPreview).trim().toLowerCase();
+    return preview === "/compact" || preview.startsWith("/compact ");
+  }
+
+  private extractClaudeCompactFailure(text: string): string | null {
+    if (!this.isCompactCommandActive()) {
+      return null;
+    }
+
+    const matchedLine = normalizeOutput(text)
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .find((line) => CLAUDE_COMPACT_FAILURE_RE.test(line));
+    if (!matchedLine) {
+      return null;
+    }
+
+    const detail = matchedLine
+      .replace(/^Error:\s*Error during compaction:\s*/i, "")
+      .replace(/^Error:\s*/i, "")
+      .replace(/^(?:compact|compaction)\s+failed:\s*/i, "")
+      .trim();
+    return truncatePreview(
+      `Compact failed: ${detail || "Claude reported an unknown compaction error."}`,
+      500,
+    );
+  }
+
+  private failClaudeTurn(message: string): void {
+    const hasActiveTurn =
+      this.state.status === "busy" ||
+      this.state.status === "awaiting_approval" ||
+      this.hasAcceptedInput ||
+      this.pendingApproval !== null ||
+      this.state.activeTurnOrigin !== undefined ||
+      this.currentPreview !== "(idle)";
+    if (!hasActiveTurn) {
+      return;
+    }
+
+    this.clearCompletionTimer();
+    this.clearWechatWorkingNotice(true);
+    this.pendingCliApprovalHints = null;
+    this.flushPendingClaudeHookApprovals();
+    this.pendingApproval = null;
+    this.state.pendingApproval = null;
+    this.state.pendingApprovalOrigin = undefined;
+    this.state.activeTurnOrigin = undefined;
+    this.hasAcceptedInput = false;
+    this.setStatus("idle");
+    this.emit({
+      type: "task_failed",
+      message,
+      timestamp: nowIso(),
+    });
+    this.currentPreview = "(idle)";
+  }
+
+  private completeClaudeCompact(params?: {
+    nextResumeConversationId?: string | null;
+  }): void {
+    const compactedAtMs = Date.now();
+    const shouldEmitNotice =
+      compactedAtMs - this.lastCompactCompletionAtMs > CLAUDE_COMPACT_DEDUP_MS;
+    this.lastCompactCompletionAtMs = compactedAtMs;
+
+    if (shouldEmitNotice) {
+      const previousResumeConversationId = this.resumeConversationId;
+      const nextResumeConversationId =
+        params?.nextResumeConversationId ?? previousResumeConversationId;
+      const detail =
+        previousResumeConversationId &&
+        nextResumeConversationId &&
+        previousResumeConversationId !== nextResumeConversationId
+          ? ` Old ID: ${previousResumeConversationId} → New ID: ${nextResumeConversationId}.`
+          : "";
+      this.emitClaudeNotice(
+        `Conversation was compacted.${detail} Bridge is ready for new WeChat messages.`,
+        "info",
+      );
+    }
+
+    const shouldEmitTaskComplete =
+      this.state.status === "busy" ||
+      this.state.status === "awaiting_approval" ||
+      this.hasAcceptedInput;
+    const completedPreview = this.currentPreview;
+    this.clearCompletionTimer();
+    this.clearWechatWorkingNotice(true);
+    this.pendingCliApprovalHints = null;
+    this.flushPendingClaudeHookApprovals();
+    this.pendingApproval = null;
+    this.state.pendingApproval = null;
+    this.state.pendingApprovalOrigin = undefined;
+    this.state.activeTurnOrigin = undefined;
+    this.hasAcceptedInput = false;
+    this.setStatus("idle");
+    if (shouldEmitTaskComplete) {
+      this.emit({
+        type: "task_complete",
+        summary: completedPreview,
+        timestamp: nowIso(),
+      });
+    }
+    this.currentPreview = "(idle)";
+  }
+
   private handleClaudeHookEnvelope(params: {
     requestId: string;
     rawPayload: string;
@@ -628,16 +768,23 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
       nextTranscriptPath ?? undefined,
     );
 
-    // Detect compact operation (transcript path changed)
+    const compactedByTranscriptRotation =
+      Boolean(this.transcriptPath) &&
+      Boolean(nextTranscriptPath) &&
+      this.transcriptPath !== nextTranscriptPath &&
+      (this.state.status === "busy" ||
+        this.state.status === "awaiting_approval" ||
+        this.hasAcceptedInput);
+
+    // Compact may keep the same runtime session id, so rely on the structured
+    // source when available and fall back to transcript rotation while a turn is active.
     if (
-      this.transcriptPath &&
-      nextTranscriptPath &&
-      this.transcriptPath !== nextTranscriptPath
+      payload.source === "compact" ||
+      compactedByTranscriptRotation
     ) {
-      this.emitClaudeNotice(
-        `Session compacted: ${this.resumeConversationId ?? "unknown"} → ${nextResumeConversationId ?? "unknown"}`,
-        "info",
-      );
+      this.completeClaudeCompact({
+        nextResumeConversationId,
+      });
     }
 
     this.runtimeSessionId = payload.session_id;
@@ -820,21 +967,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     error_details?: string;
     last_assistant_message?: string;
   }): void {
-    this.clearWechatWorkingNotice(true);
-    this.pendingCliApprovalHints = null;
-    this.flushPendingClaudeHookApprovals();
-    this.pendingApproval = null;
-    this.state.pendingApproval = null;
-    this.state.pendingApprovalOrigin = undefined;
-    this.state.activeTurnOrigin = undefined;
-    this.hasAcceptedInput = false;
-    this.setStatus("idle");
-    this.emit({
-      type: "task_failed",
-      message: buildClaudeFailureMessage(payload),
-      timestamp: nowIso(),
-    });
-    this.currentPreview = "(idle)";
+    this.failClaudeTurn(buildClaudeFailureMessage(payload));
   }
 
   private respondToClaudeHook(

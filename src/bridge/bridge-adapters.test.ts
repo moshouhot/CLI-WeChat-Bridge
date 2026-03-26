@@ -841,6 +841,143 @@ describe("Claude CLI compatibility", () => {
 
     await adapter.dispose();
   });
+
+  test("completes a Claude compact turn even when SessionStart keeps the same session", () => {
+    const adapter = createBridgeAdapter({
+      kind: "claude",
+      command: "claude",
+      cwd: process.cwd(),
+      renderMode: "companion",
+      initialSharedSessionId: "session-123",
+      initialResumeConversationId: "resume-123",
+      initialTranscriptPath: "/tmp/resume-123.jsonl",
+    }) as any;
+    const events: Array<{ type: string; text?: string }> = [];
+    adapter.setEventSink((event: { type: string; text?: string }) => events.push(event));
+    adapter.renderLocalOutput = () => undefined;
+    adapter.hasAcceptedInput = true;
+    adapter.currentPreview = "/compact";
+    adapter.state.status = "busy";
+    adapter.state.activeTurnOrigin = "wechat";
+
+    adapter.handleClaudeSessionStart({
+      session_id: "session-123",
+      source: "compact",
+      transcript_path: "/tmp/resume-123.jsonl",
+    });
+
+    expect(adapter.getState()).toMatchObject({
+      status: "idle",
+      sharedSessionId: "session-123",
+      activeRuntimeSessionId: "session-123",
+      resumeConversationId: "resume-123",
+      transcriptPath: "/tmp/resume-123.jsonl",
+    });
+    expect(events.map((event) => event.type)).toEqual(["notice", "status", "task_complete"]);
+    expect(events[0]?.text).toBe(
+      "Conversation was compacted. Bridge is ready for new WeChat messages.",
+    );
+  });
+
+  test("detects Claude compact completion directly from PTY output", () => {
+    const adapter = createBridgeAdapter({
+      kind: "claude",
+      command: "claude",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    }) as any;
+    const events: Array<{ type: string; text?: string }> = [];
+    adapter.setEventSink((event: { type: string; text?: string }) => events.push(event));
+    adapter.renderLocalOutput = () => undefined;
+    adapter.hasAcceptedInput = true;
+    adapter.currentPreview = "/compact";
+    adapter.state.status = "busy";
+    adapter.state.activeTurnOrigin = "wechat";
+
+    adapter.handleData("\u001b[2mCompacted (ctrl+o to see full summary)\u001b[22m\r\n");
+
+    expect(adapter.getState().status).toBe("idle");
+    expect(events.map((event) => event.type)).toEqual(["notice", "status", "task_complete"]);
+    expect(events[0]?.text).toBe(
+      "Conversation was compacted. Bridge is ready for new WeChat messages.",
+    );
+  });
+
+  test("detects Claude compact failure directly from PTY output", () => {
+    const adapter = createBridgeAdapter({
+      kind: "claude",
+      command: "claude",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    }) as any;
+    const events: Array<{ type: string; message?: string }> = [];
+    adapter.setEventSink((event: { type: string; message?: string }) => events.push(event));
+    adapter.renderLocalOutput = () => undefined;
+    adapter.hasAcceptedInput = true;
+    adapter.currentPreview = "/compact";
+    adapter.state.status = "busy";
+    adapter.state.activeTurnOrigin = "wechat";
+
+    adapter.handleData(
+      'Error: Error during compaction: Error: Please run /login · API Error: 403 {"error":{"message":"","type":"upstream_error"}}\r\n',
+    );
+
+    expect(adapter.getState().status).toBe("idle");
+    expect(events.map((event) => event.type)).toEqual(["status", "task_failed"]);
+    expect(events[1]?.message).toBe(
+      'Compact failed: Please run /login · API Error: 403 {"error":{"message":"","type":"upstream_error"}}',
+    );
+  });
+
+  test("detects non-403 Claude compact failures without hardcoded login text", () => {
+    const adapter = createBridgeAdapter({
+      kind: "claude",
+      command: "claude",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    }) as any;
+    const events: Array<{ type: string; message?: string }> = [];
+    adapter.setEventSink((event: { type: string; message?: string }) => events.push(event));
+    adapter.renderLocalOutput = () => undefined;
+    adapter.hasAcceptedInput = true;
+    adapter.currentPreview = "/compact";
+    adapter.state.status = "busy";
+    adapter.state.activeTurnOrigin = "wechat";
+
+    adapter.handleData(
+      'Error: Error during compaction: Error: API Error: 502 {"error":{"message":"proxy failed","type":"proxy_error"}}\r\n',
+    );
+
+    expect(adapter.getState().status).toBe("idle");
+    expect(events.map((event) => event.type)).toEqual(["status", "task_failed"]);
+    expect(events[1]?.message).toBe(
+      'Compact failed: API Error: 502 {"error":{"message":"proxy failed","type":"proxy_error"}}',
+    );
+  });
+
+  test("ignores duplicate Claude compact failures after the turn is already settled", () => {
+    const adapter = createBridgeAdapter({
+      kind: "claude",
+      command: "claude",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    }) as any;
+    const events: Array<{ type: string; message?: string }> = [];
+    adapter.setEventSink((event: { type: string; message?: string }) => events.push(event));
+    adapter.renderLocalOutput = () => undefined;
+    adapter.hasAcceptedInput = true;
+    adapter.currentPreview = "/compact";
+    adapter.state.status = "busy";
+    adapter.state.activeTurnOrigin = "wechat";
+
+    adapter.handleData("Error: Error during compaction: Error: Please run /login · API Error: 403\r\n");
+    adapter.handleClaudeStopFailure({
+      error: "Please run /login",
+      error_details: "API Error: 403",
+    });
+
+    expect(events.filter((event) => event.type === "task_failed")).toHaveLength(1);
+  });
 });
 
 describe("extractCodexThreadFollowIdFromStatusChanged", () => {
