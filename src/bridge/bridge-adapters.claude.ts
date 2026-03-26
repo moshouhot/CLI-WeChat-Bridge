@@ -88,6 +88,27 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
       return;
     }
 
+    // Validate transcript file exists before launching Claude CLI.
+    // After a compact, the old transcript is deleted and the persisted
+    // resumeConversationId becomes invalid, causing --resume to crash.
+    if (this.transcriptPath) {
+      try {
+        fs.accessSync(this.transcriptPath);
+      } catch {
+        this.emitClaudeNotice(
+          `Conversation transcript "${this.transcriptPath}" no longer exists (likely after compact). Starting fresh session.`,
+          "warning",
+        );
+        this.transcriptPath = null;
+        this.resumeConversationId = null;
+        this.runtimeSessionId = null;
+        this.state.transcriptPath = undefined;
+        this.state.resumeConversationId = undefined;
+        this.state.sharedSessionId = undefined;
+        this.state.activeRuntimeSessionId = undefined;
+      }
+    }
+
     await this.startHookServer();
     try {
       await super.start();
@@ -606,6 +627,18 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     const nextResumeConversationId = extractClaudeResumeConversationId(
       nextTranscriptPath ?? undefined,
     );
+
+    // Detect compact operation (transcript path changed)
+    if (
+      this.transcriptPath &&
+      nextTranscriptPath &&
+      this.transcriptPath !== nextTranscriptPath
+    ) {
+      this.emitClaudeNotice(
+        `Session compacted: ${this.resumeConversationId ?? "unknown"} → ${nextResumeConversationId ?? "unknown"}`,
+        "info",
+      );
+    }
 
     this.runtimeSessionId = payload.session_id;
     this.state.sharedSessionId = payload.session_id;
