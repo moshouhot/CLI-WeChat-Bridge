@@ -21,8 +21,12 @@ import {
   readLocalCompanionEndpoint,
   type LocalCompanionEndpoint,
 } from "./local-companion-link.ts";
+import type { BridgeAdapterKind } from "../bridge/bridge-types.ts";
+
+type LocalCompanionLaunchAdapter = Exclude<BridgeAdapterKind, "shell">;
 
 type LocalCompanionStartCliOptions = {
+  adapter: LocalCompanionLaunchAdapter;
   cwd: string;
   profile?: string;
   timeoutMs: number;
@@ -30,9 +34,10 @@ type LocalCompanionStartCliOptions = {
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_WAIT_TIMEOUT_MS = 15_000;
+const DEFAULT_ADAPTER: LocalCompanionLaunchAdapter = "codex";
 
-function log(message: string): void {
-  process.stderr.write(`[codex-start] ${message}\n`);
+function log(adapter: LocalCompanionLaunchAdapter, message: string): void {
+  process.stderr.write(`[wechat-${adapter}-start] ${message}\n`);
 }
 
 export function normalizeComparablePath(cwd: string): string {
@@ -45,6 +50,7 @@ export function isSameWorkspaceCwd(left: string, right: string): boolean {
 }
 
 export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
+  let adapter: LocalCompanionLaunchAdapter = DEFAULT_ADAPTER;
   let cwd = process.cwd();
   let profile: string | undefined;
   let timeoutMs = DEFAULT_WAIT_TIMEOUT_MS;
@@ -57,13 +63,24 @@ export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
       process.stdout.write(
         [
           "Usage: wechat-codex-start [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>]",
+          "       wechat-claude-start [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>]",
+          "       local-companion-start [--adapter <codex|claude>] [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>]",
           "",
-          "Starts or reuses a transient Codex bridge for the current directory, waits for the local companion endpoint, then opens the visible Codex companion.",
-          "Closing the visible Codex companion also stops that transient bridge.",
+          "Starts or reuses a transient Codex or Claude bridge for the current directory, waits for the local companion endpoint, then opens the visible local companion.",
+          "Closing the visible local companion also stops that transient bridge.",
           "",
         ].join("\n"),
       );
       process.exit(0);
+    }
+
+    if (arg === "--adapter") {
+      if (!next || !["codex", "claude"].includes(next)) {
+        throw new Error(`Invalid adapter: ${next ?? "(missing)"}`);
+      }
+      adapter = next as LocalCompanionLaunchAdapter;
+      i += 1;
+      continue;
     }
 
     if (arg === "--cwd") {
@@ -100,7 +117,7 @@ export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
     throw new Error(`Unknown argument: ${arg}`);
   }
 
-  return { cwd, profile, timeoutMs };
+  return { adapter, cwd, profile, timeoutMs };
 }
 
 function isPidAlive(pid: number): boolean {
@@ -127,9 +144,12 @@ async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boole
   return !isPidAlive(pid);
 }
 
-async function stopExistingBridge(lock: BridgeLockPayload): Promise<void> {
+async function stopExistingBridge(
+  lock: BridgeLockPayload,
+  requestedAdapter: LocalCompanionLaunchAdapter,
+): Promise<void> {
   const { pid, cwd } = lock;
-  log(`Stopping existing bridge for ${cwd} (pid=${pid})...`);
+  log(requestedAdapter, `Stopping existing bridge for ${cwd} (pid=${pid})...`);
 
   try {
     process.kill(pid);
@@ -145,7 +165,10 @@ async function stopExistingBridge(lock: BridgeLockPayload): Promise<void> {
   }
 
   clearLocalCompanionEndpoint(cwd);
-  log(`Cleared stale local companion endpoint for previous workspace ${cwd}.`);
+  log(
+    requestedAdapter,
+    `Cleared stale local companion endpoint for previous workspace ${cwd}.`,
+  );
 }
 
 async function isEndpointReachable(endpoint: LocalCompanionEndpoint): Promise<boolean> {
@@ -174,9 +197,12 @@ async function isEndpointReachable(endpoint: LocalCompanionEndpoint): Promise<bo
   });
 }
 
-async function readUsableEndpoint(cwd: string): Promise<LocalCompanionEndpoint | null> {
+async function readUsableEndpoint(
+  cwd: string,
+  adapter: LocalCompanionLaunchAdapter,
+): Promise<LocalCompanionEndpoint | null> {
   const endpoint = readLocalCompanionEndpoint(cwd);
-  if (!endpoint || endpoint.kind !== "codex") {
+  if (!endpoint || endpoint.kind !== adapter) {
     return null;
   }
 
@@ -185,7 +211,7 @@ async function readUsableEndpoint(cwd: string): Promise<LocalCompanionEndpoint |
   }
 
   clearLocalCompanionEndpoint(cwd);
-  log(`Removed stale local companion endpoint for ${cwd}.`);
+  log(adapter, `Removed stale local companion endpoint for ${cwd}.`);
   return null;
 }
 
@@ -198,7 +224,7 @@ export function buildBackgroundBridgeArgs(
     "--experimental-strip-types",
     entryPath,
     "--adapter",
-    "codex",
+    options.adapter,
     "--cwd",
     options.cwd,
     "--lifecycle",
@@ -229,12 +255,13 @@ function startBridgeInBackground(options: LocalCompanionStartCliOptions): void {
 
 async function waitForEndpoint(
   cwd: string,
+  adapter: LocalCompanionLaunchAdapter,
   timeoutMs: number,
 ): Promise<LocalCompanionEndpoint> {
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
-    const endpoint = await readUsableEndpoint(cwd);
+    const endpoint = await readUsableEndpoint(cwd, adapter);
     if (endpoint) {
       return endpoint;
     }
@@ -242,7 +269,7 @@ async function waitForEndpoint(
   }
 
   throw new Error(
-    `Timed out waiting for the Codex bridge endpoint for ${cwd}. Check ${BRIDGE_LOG_FILE}.`,
+    `Timed out waiting for the ${adapter} bridge endpoint for ${cwd}. Check ${BRIDGE_LOG_FILE}.`,
   );
 }
 
@@ -250,35 +277,35 @@ async function ensureBridgeReady(options: LocalCompanionStartCliOptions): Promis
   const lock = readBridgeLockFile();
   if (lock && isPidAlive(lock.pid)) {
     if (shouldAutoReclaimBridgeLock(lock)) {
-      await stopExistingBridge(lock);
-      log(`Starting replacement bridge in background for ${options.cwd}...`);
+      await stopExistingBridge(lock, options.adapter);
+      log(options.adapter, `Starting replacement bridge in background for ${options.cwd}...`);
       startBridgeInBackground(options);
-      await waitForEndpoint(options.cwd, options.timeoutMs);
+      await waitForEndpoint(options.cwd, options.adapter, options.timeoutMs);
       return;
     }
 
-    if (!isSameWorkspaceCwd(lock.cwd, options.cwd)) {
-      await stopExistingBridge(lock);
-      log(`Starting replacement bridge in background for ${options.cwd}...`);
+    if (lock.adapter !== options.adapter || !isSameWorkspaceCwd(lock.cwd, options.cwd)) {
+      await stopExistingBridge(lock, options.adapter);
+      log(options.adapter, `Starting replacement bridge in background for ${options.cwd}...`);
       startBridgeInBackground(options);
-      await waitForEndpoint(options.cwd, options.timeoutMs);
+      await waitForEndpoint(options.cwd, options.adapter, options.timeoutMs);
       return;
     }
 
-    log(`Found running bridge for ${options.cwd}. Waiting for endpoint...`);
-    await waitForEndpoint(options.cwd, options.timeoutMs);
+    log(options.adapter, `Found running bridge for ${options.cwd}. Waiting for endpoint...`);
+    await waitForEndpoint(options.cwd, options.adapter, options.timeoutMs);
     return;
   }
 
-  const existingEndpoint = await readUsableEndpoint(options.cwd);
+  const existingEndpoint = await readUsableEndpoint(options.cwd, options.adapter);
   if (existingEndpoint) {
-    log(`Reusing running bridge for ${options.cwd}.`);
+    log(options.adapter, `Reusing running bridge for ${options.cwd}.`);
     return;
   }
 
-  log(`Starting bridge in background for ${options.cwd}...`);
+  log(options.adapter, `Starting bridge in background for ${options.cwd}...`);
   startBridgeInBackground(options);
-  await waitForEndpoint(options.cwd, options.timeoutMs);
+  await waitForEndpoint(options.cwd, options.adapter, options.timeoutMs);
 }
 
 async function runCompanion(options: LocalCompanionStartCliOptions): Promise<number> {
@@ -288,7 +315,7 @@ async function runCompanion(options: LocalCompanionStartCliOptions): Promise<num
     "--experimental-strip-types",
     entryPath,
     "--adapter",
-    "codex",
+    options.adapter,
     "--cwd",
     options.cwd,
   ];
@@ -312,8 +339,8 @@ async function runCompanion(options: LocalCompanionStartCliOptions): Promise<num
 }
 
 async function main(): Promise<void> {
-  migrateLegacyChannelFiles(log);
   const options = parseCliArgs(process.argv.slice(2));
+  migrateLegacyChannelFiles((message) => log(options.adapter, message));
 
   if (!fs.existsSync(CREDENTIALS_FILE)) {
     throw new Error(`Missing WeChat credentials. Run "bun run setup" first. (${CREDENTIALS_FILE})`);
@@ -327,7 +354,14 @@ async function main(): Promise<void> {
 const isDirectRun = Boolean((import.meta as ImportMeta & { main?: boolean }).main);
 if (isDirectRun) {
   main().catch((error) => {
-    log(error instanceof Error ? error.message : String(error));
+    const adapter = (() => {
+      try {
+        return parseCliArgs(process.argv.slice(2)).adapter;
+      } catch {
+        return DEFAULT_ADAPTER;
+      }
+    })();
+    log(adapter, error instanceof Error ? error.message : String(error));
     process.exit(1);
   });
 }

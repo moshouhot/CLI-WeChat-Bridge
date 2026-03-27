@@ -11,12 +11,15 @@ import {
 describe("local-companion-start helpers", () => {
   test("parseCliArgs uses current working directory by default", () => {
     const options = parseCliArgs([]);
+    expect(options.adapter).toBe("codex");
     expect(options.cwd).toBe(process.cwd());
     expect(options.timeoutMs).toBe(15000);
   });
 
-  test("parseCliArgs parses cwd, profile, and timeout", () => {
+  test("parseCliArgs parses adapter, cwd, profile, and timeout", () => {
     const options = parseCliArgs([
+      "--adapter",
+      "claude",
       "--cwd",
       "./tmp/project",
       "--profile",
@@ -25,13 +28,15 @@ describe("local-companion-start helpers", () => {
       "25000",
     ]);
 
+    expect(options.adapter).toBe("claude");
     expect(options.cwd).toBe(path.resolve("./tmp/project"));
     expect(options.profile).toBe("work");
     expect(options.timeoutMs).toBe(25000);
   });
 
-  test("buildBackgroundBridgeArgs binds the background bridge to the launcher lifetime", () => {
+  test("buildBackgroundBridgeArgs binds codex background bridge to the launcher lifetime", () => {
     const args = buildBackgroundBridgeArgs("/tmp/wechat-bridge.ts", {
+      adapter: "codex",
       cwd: path.resolve("./tmp/project"),
       profile: "work",
       timeoutMs: 15000,
@@ -49,6 +54,26 @@ describe("local-companion-start helpers", () => {
       "companion_bound",
       "--profile",
       "work",
+    ]);
+  });
+
+  test("buildBackgroundBridgeArgs can launch claude in the background", () => {
+    const args = buildBackgroundBridgeArgs("/tmp/wechat-bridge.ts", {
+      adapter: "claude",
+      cwd: path.resolve("./tmp/project"),
+      timeoutMs: 15000,
+    });
+
+    expect(args).toEqual([
+      "--no-warnings",
+      "--experimental-strip-types",
+      "/tmp/wechat-bridge.ts",
+      "--adapter",
+      "claude",
+      "--cwd",
+      path.resolve("./tmp/project"),
+      "--lifecycle",
+      "companion_bound",
     ]);
   });
 

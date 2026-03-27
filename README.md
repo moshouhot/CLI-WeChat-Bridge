@@ -160,6 +160,14 @@ wechat-bridge-claude
 wechat-claude
 ```
 
+也支持单命令启动：
+
+```bash
+wechat-claude-start
+```
+
+它会自动在当前目录拉起或复用 `wechat-bridge-claude`，等待 endpoint 就绪后打开可见的 `wechat-claude` companion。
+
 ![Claude Windows](docs/images/image-6.png)
 
 ![Claude Linux](docs/images/image-7.png)
@@ -183,6 +191,7 @@ wechat-codex
 wechat-codex-start
 wechat-bridge-claude
 wechat-claude
+wechat-claude-start
 wechat-bridge-shell
 ```
 
@@ -195,6 +204,7 @@ bun run codex:panel
 bun run codex:start
 bun run bridge:claude
 bun run claude:companion
+bun run claude:start
 bun run bridge:shell
 bun run bridge:bun -- --adapter codex
 bun run test
@@ -235,6 +245,21 @@ wechat-codex-start --profile work
 
 - `--cwd <path>`：显式指定 bridge / companion 对应的工作目录
 - `--profile <name-or-path>`：转发给后台启动的 `wechat-bridge-codex`
+- `--timeout-ms <ms>`：等待当前目录 endpoint 的最长时间，默认 `15000`
+
+### `wechat-claude-start` 参数
+
+示例：
+
+```bash
+wechat-claude-start --cwd D:\work\my-project
+wechat-claude-start --profile work
+```
+
+支持参数：
+
+- `--cwd <path>`：显式指定 bridge / companion 对应的工作目录
+- `--profile <name-or-path>`：转发给后台启动的 `wechat-bridge-claude`
 - `--timeout-ms <ms>`：等待当前目录 endpoint 的最长时间，默认 `15000`
 
 ## 微信侧支持的指令

@@ -1,6 +1,6 @@
 {
   "name": "@unlinearity/cli-wechat-bridge",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "CLI WeChat Bridge for Codex, Claude Code, and PowerShell over WeChat",
   "type": "module",
   "private": true,
@@ -21,6 +21,7 @@
     "wechat-codex": "./bin/wechat-codex.mjs",
     "wechat-codex-start": "./bin/wechat-codex-start.mjs",
     "wechat-claude": "./bin/wechat-claude.mjs",
+    "wechat-claude-start": "./bin/wechat-claude-start.mjs",
     "wechat-bridge-claude": "./bin/wechat-bridge-claude.mjs",
     "wechat-bridge-shell": "./bin/wechat-bridge-shell.mjs",
     "wechat-check-update": "./bin/wechat-check-update.mjs"
@@ -33,6 +34,7 @@
     "bridge:codex": "node --no-warnings --experimental-strip-types src/bridge/wechat-bridge.ts --adapter codex",
     "codex:panel": "node --no-warnings --experimental-strip-types src/companion/local-companion.ts --adapter codex",
     "codex:start": "node --no-warnings --experimental-strip-types src/companion/local-companion-start.ts",
+    "claude:start": "node --no-warnings --experimental-strip-types src/companion/local-companion-start.ts --adapter claude",
     "claude:companion": "node --no-warnings --experimental-strip-types src/companion/local-companion.ts --adapter claude",
     "bridge:claude": "node --no-warnings --experimental-strip-types src/bridge/wechat-bridge.ts --adapter claude",
     "bridge:shell": "node --no-warnings --experimental-strip-types src/bridge/wechat-bridge.ts --adapter shell",
