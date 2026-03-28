@@ -7,6 +7,7 @@ import {
   clearLocalCompanionEndpoint,
   clearLocalCompanionOccupancy,
   sendLocalCompanionMessage,
+  updateLocalCompanionHealth,
   updateLocalCompanionOccupancy,
   writeLocalCompanionEndpoint,
   type LocalCompanionCommand,
@@ -288,6 +289,11 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
         return;
       case "state":
         if (this.endpoint) {
+          updateLocalCompanionHealth(
+            this.options.cwd,
+            buildCompanionHealthPatch(message.state, nowIso()),
+            this.endpoint.instanceId,
+          );
           const nextSessionId = getSharedSessionIdFromAdapterState(message.state);
           if (
             this.endpoint.sharedSessionId !== nextSessionId ||
@@ -410,6 +416,21 @@ export function shouldStopBridgeAfterCompanionDisconnect(
   lifecycle: BridgeLifecycleMode | undefined,
 ): boolean {
   return lifecycle === "companion_bound";
+}
+
+export function buildCompanionHealthPatch(
+  state: BridgeAdapterState,
+  timestamp: string,
+): {
+  companionStatus: BridgeAdapterState["status"];
+  companionLastStateAt: string;
+  companionWorkerPid?: number;
+} {
+  return {
+    companionStatus: state.status,
+    companionLastStateAt: timestamp,
+    companionWorkerPid: state.pid,
+  };
 }
 
 export abstract class AbstractPtyAdapter implements BridgeAdapter {

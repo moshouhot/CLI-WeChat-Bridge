@@ -10,6 +10,7 @@ import type {
   BridgeAdapterKind,
   BridgeAdapterState,
   BridgeEvent,
+  BridgeWorkerStatus,
 } from "../bridge/bridge-types.ts";
 
 export type LocalCompanionCommand =
@@ -37,6 +38,9 @@ export type LocalCompanionEndpoint = {
   transcriptPath?: string;
   companionPid?: number;
   companionConnectedAt?: string;
+  companionStatus?: BridgeWorkerStatus;
+  companionLastStateAt?: string;
+  companionWorkerPid?: number;
   startedAt: string;
 };
 
@@ -121,6 +125,12 @@ function normalizeEndpoint(value: unknown): LocalCompanionEndpoint | null {
     companionPid: typeof record.companionPid === "number" ? record.companionPid : undefined,
     companionConnectedAt:
       typeof record.companionConnectedAt === "string" ? record.companionConnectedAt : undefined,
+    companionStatus:
+      typeof record.companionStatus === "string" ? (record.companionStatus as BridgeWorkerStatus) : undefined,
+    companionLastStateAt:
+      typeof record.companionLastStateAt === "string" ? record.companionLastStateAt : undefined,
+    companionWorkerPid:
+      typeof record.companionWorkerPid === "number" ? record.companionWorkerPid : undefined,
     startedAt: record.startedAt,
   };
 }
@@ -190,9 +200,42 @@ export function clearLocalCompanionOccupancy(cwd: string, instanceId?: string): 
       ...endpoint,
       companionPid: undefined,
       companionConnectedAt: undefined,
+      companionStatus: undefined,
+      companionLastStateAt: undefined,
+      companionWorkerPid: undefined,
     };
 
     writeLocalCompanionEndpoint(nextEndpoint);
+  } catch {
+    // Best effort cleanup.
+  }
+}
+
+export function updateLocalCompanionHealth(
+  cwd: string,
+  patch: {
+    companionStatus?: BridgeWorkerStatus;
+    companionLastStateAt?: string;
+    companionWorkerPid?: number;
+  },
+  instanceId?: string,
+): void {
+  try {
+    const endpoint = readLocalCompanionEndpoint(cwd);
+    if (!endpoint) {
+      return;
+    }
+
+    if (instanceId && endpoint.instanceId !== instanceId) {
+      return;
+    }
+
+    writeLocalCompanionEndpoint({
+      ...endpoint,
+      companionStatus: patch.companionStatus,
+      companionLastStateAt: patch.companionLastStateAt,
+      companionWorkerPid: patch.companionWorkerPid,
+    });
   } catch {
     // Best effort cleanup.
   }

@@ -146,4 +146,46 @@ describe("local companion endpoint occupancy", () => {
       transcriptPath: undefined,
     });
   });
+
+  test("updateLocalCompanionHealth stores the latest companion health status", async () => {
+    const dataDir = makeTempDataDir();
+    const cwd = "D:/work/project-d";
+    const link = await loadLocalCompanionLinkModule(dataDir);
+
+    link.writeLocalCompanionEndpoint({
+      instanceId: "bridge-4",
+      kind: "codex",
+      port: 9011,
+      token: "token-4",
+      cwd,
+      command: "codex",
+      startedAt: "2026-03-28T00:06:00.000Z",
+    });
+
+    link.updateLocalCompanionHealth(cwd, {
+      companionStatus: "stopped",
+      companionLastStateAt: "2026-03-28T00:07:00.000Z",
+      companionWorkerPid: 4321,
+    });
+
+    expect(link.readLocalCompanionEndpoint(cwd)).toEqual({
+      instanceId: "bridge-4",
+      kind: "codex",
+      port: 9011,
+      token: "token-4",
+      cwd,
+      command: "codex",
+      startedAt: "2026-03-28T00:06:00.000Z",
+      companionStatus: "stopped",
+      companionLastStateAt: "2026-03-28T00:07:00.000Z",
+      companionWorkerPid: 4321,
+      companionPid: undefined,
+      companionConnectedAt: undefined,
+      profile: undefined,
+      sharedSessionId: undefined,
+      sharedThreadId: undefined,
+      resumeConversationId: undefined,
+      transcriptPath: undefined,
+    });
+  });
 });

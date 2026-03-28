@@ -40,6 +40,7 @@ type EnsureBridgeReadyResult = {
 export type LocalCompanionLaunchDecision =
   | { kind: "already_active"; message: string }
   | { kind: "open_companion"; message: string }
+  | { kind: "restart_unhealthy"; message: string }
   | {
       kind: "switch_workspace";
       fromCwd: string;
@@ -89,6 +90,10 @@ export function formatSwitchFailureMessage(cwd: string): string {
   return `Failed to stop the previous workspace bridge. Switch canceled; current workspace remains ${cwd}.`;
 }
 
+export function formatRestartUnhealthyMessage(cwd: string): string {
+  return `Detected unhealthy companion state for ${cwd}. Restarting bridge...`;
+}
+
 export function decideLaunchAction(input: DecideLaunchActionInput): LocalCompanionLaunchDecision {
   const sameWorkspace =
     input.runningLock &&
@@ -111,6 +116,18 @@ export function decideLaunchAction(input: DecideLaunchActionInput): LocalCompani
         toCwd: input.requestedCwd,
         message: formatSwitchMessage(input.runningLock.cwd, input.requestedCwd),
         failureMessage: formatSwitchFailureMessage(input.runningLock.cwd),
+      };
+    }
+
+    if (
+      input.endpoint &&
+      input.endpointIsReachable &&
+      input.companionIsAlive &&
+      (input.endpoint.companionStatus === "stopped" || input.endpoint.companionStatus === "error")
+    ) {
+      return {
+        kind: "restart_unhealthy",
+        message: formatRestartUnhealthyMessage(input.requestedCwd),
       };
     }
 
@@ -411,6 +428,18 @@ async function ensureBridgeReady(
     if (!endpoint) {
       await waitForEndpoint(options.cwd, options.adapter, options.timeoutMs);
     }
+    return { shouldOpenCompanion: true };
+  }
+
+  if (decision.kind === "restart_unhealthy") {
+    if (!lock || !lockIsAlive) {
+      throw new Error("Cannot restart unhealthy workspace because the active bridge lock is missing.");
+    }
+
+    await stopExistingBridge(lock, options.adapter);
+    log(options.adapter, `Starting replacement bridge in background for ${options.cwd}...`);
+    startBridgeInBackground(options);
+    await waitForEndpoint(options.cwd, options.adapter, options.timeoutMs);
     return { shouldOpenCompanion: true };
   }
 

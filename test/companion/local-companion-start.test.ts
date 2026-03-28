@@ -192,4 +192,43 @@ describe("local-companion-start helpers", () => {
       failureMessage: formatSwitchFailureMessage("D:/work/project-a"),
     });
   });
+
+  test("same workspace with a stopped companion requests auto-heal restart", () => {
+    const decision = decideLaunchAction({
+      requestedAdapter: "codex",
+      requestedCwd: "D:/work/project",
+      runningLock: {
+        pid: 123,
+        parentPid: 321,
+        instanceId: "bridge-1",
+        adapter: "codex",
+        command: "codex",
+        cwd: "D:/work/project",
+        startedAt: "2026-03-28T00:00:00.000Z",
+        lifecycle: "companion_bound",
+      },
+      lockIsAlive: true,
+      lockShouldAutoReclaim: false,
+      endpoint: {
+        instanceId: "bridge-1",
+        kind: "codex",
+        port: 8123,
+        token: "token",
+        cwd: "D:/work/project",
+        command: "codex",
+        startedAt: "2026-03-28T00:01:00.000Z",
+        companionPid: 456,
+        companionConnectedAt: "2026-03-28T00:02:00.000Z",
+        companionStatus: "stopped",
+        companionLastStateAt: "2026-03-28T00:03:00.000Z",
+      },
+      endpointIsReachable: true,
+      companionIsAlive: true,
+    });
+
+    expect(decision).toEqual({
+      kind: "restart_unhealthy",
+      message: "Detected unhealthy companion state for D:/work/project. Restarting bridge...",
+    });
+  });
 });

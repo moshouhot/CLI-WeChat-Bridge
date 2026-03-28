@@ -255,6 +255,7 @@ wechat-codex-start --profile work
 行为说明：
 
 - 同目录重复执行：复用当前目录 bridge；如果 companion 已经在线，则直接提示当前工作区已激活，不会重复打开第二个 companion
+- 同目录检测到 companion 已连接但 worker 状态异常（如 `stopped` / `error`）时：会自动回收旧 bridge 并重新启动
 - 不同目录执行：会停止旧目录的临时 bridge，并切换到新的活动工作区
 - 关闭可见 companion 后，后台 `companion_bound` bridge 会一起退出
 
