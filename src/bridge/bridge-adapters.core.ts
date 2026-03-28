@@ -5,7 +5,9 @@ import {
   attachLocalCompanionMessageListener,
   buildLocalCompanionToken,
   clearLocalCompanionEndpoint,
+  clearLocalCompanionOccupancy,
   sendLocalCompanionMessage,
+  updateLocalCompanionOccupancy,
   writeLocalCompanionEndpoint,
   type LocalCompanionCommand,
   type LocalCompanionEndpoint,
@@ -236,6 +238,14 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
         authenticated = true;
         this.socket = socket;
         this.detachMessageListener = detachListener;
+        updateLocalCompanionOccupancy(
+          this.options.cwd,
+          {
+            companionPid: message.companionPid,
+            companionConnectedAt: nowIso(),
+          },
+          this.endpoint?.instanceId,
+        );
         sendLocalCompanionMessage(socket, { type: "hello_ack" });
         return;
       }
@@ -245,6 +255,7 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
 
     socket.once("close", () => {
       if (this.socket === socket) {
+        clearLocalCompanionOccupancy(this.options.cwd, this.endpoint?.instanceId);
         this.detachPanelSocket();
         if (!this.shuttingDown) {
           if (shouldStopBridgeAfterCompanionDisconnect(this.options.lifecycle)) {
