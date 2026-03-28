@@ -17,6 +17,7 @@ import {
   type BridgeLockPayload,
 } from "../bridge/bridge-state.ts";
 import {
+  clearLocalCompanionOccupancy,
   clearLocalCompanionEndpoint,
   readLocalCompanionEndpoint,
   type LocalCompanionEndpoint,
@@ -30,6 +31,33 @@ type LocalCompanionStartCliOptions = {
   cwd: string;
   profile?: string;
   timeoutMs: number;
+};
+
+type EnsureBridgeReadyResult = {
+  shouldOpenCompanion: boolean;
+};
+
+export type LocalCompanionLaunchDecision =
+  | { kind: "already_active"; message: string }
+  | { kind: "open_companion"; message: string }
+  | {
+      kind: "switch_workspace";
+      fromCwd: string;
+      toCwd: string;
+      message: string;
+      failureMessage: string;
+    }
+  | { kind: "start_bridge"; message: string };
+
+type DecideLaunchActionInput = {
+  requestedAdapter: LocalCompanionLaunchAdapter;
+  requestedCwd: string;
+  runningLock: BridgeLockPayload | null;
+  lockIsAlive: boolean;
+  lockShouldAutoReclaim: boolean;
+  endpoint: LocalCompanionEndpoint | null;
+  endpointIsReachable: boolean;
+  companionIsAlive: boolean;
 };
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -47,6 +75,76 @@ export function normalizeComparablePath(cwd: string): string {
 
 export function isSameWorkspaceCwd(left: string, right: string): boolean {
   return normalizeComparablePath(left) === normalizeComparablePath(right);
+}
+
+export function formatAlreadyActiveMessage(cwd: string): string {
+  return `Current workspace is already active: ${cwd}. Visible companion is already running, so nothing else was opened.`;
+}
+
+export function formatSwitchMessage(fromCwd: string, toCwd: string): string {
+  return `Detected active workspace ${fromCwd}. Switching to ${toCwd}...`;
+}
+
+export function formatSwitchFailureMessage(cwd: string): string {
+  return `Failed to stop the previous workspace bridge. Switch canceled; current workspace remains ${cwd}.`;
+}
+
+export function decideLaunchAction(input: DecideLaunchActionInput): LocalCompanionLaunchDecision {
+  const sameWorkspace =
+    input.runningLock &&
+    input.lockIsAlive &&
+    input.runningLock.adapter === input.requestedAdapter &&
+    isSameWorkspaceCwd(input.runningLock.cwd, input.requestedCwd);
+
+  if (input.runningLock && input.lockIsAlive) {
+    if (input.lockShouldAutoReclaim) {
+      return {
+        kind: "start_bridge",
+        message: `Starting replacement bridge in background for ${input.requestedCwd}...`,
+      };
+    }
+
+    if (!sameWorkspace) {
+      return {
+        kind: "switch_workspace",
+        fromCwd: input.runningLock.cwd,
+        toCwd: input.requestedCwd,
+        message: formatSwitchMessage(input.runningLock.cwd, input.requestedCwd),
+        failureMessage: formatSwitchFailureMessage(input.runningLock.cwd),
+      };
+    }
+
+    if (input.endpoint && input.endpointIsReachable && input.companionIsAlive) {
+      return {
+        kind: "already_active",
+        message: formatAlreadyActiveMessage(input.requestedCwd),
+      };
+    }
+
+    return {
+      kind: "open_companion",
+      message: `Found running bridge for ${input.requestedCwd}. Opening companion...`,
+    };
+  }
+
+  if (input.endpoint && input.endpointIsReachable && input.companionIsAlive) {
+    return {
+      kind: "already_active",
+      message: formatAlreadyActiveMessage(input.requestedCwd),
+    };
+  }
+
+  if (input.endpoint && input.endpointIsReachable) {
+    return {
+      kind: "open_companion",
+      message: `Reusing running bridge for ${input.requestedCwd}. Opening companion...`,
+    };
+  }
+
+  return {
+    kind: "start_bridge",
+    message: `Starting bridge in background for ${input.requestedCwd}...`,
+  };
 }
 
 export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
@@ -215,6 +313,19 @@ async function readUsableEndpoint(
   return null;
 }
 
+function isCompanionAlive(endpoint: LocalCompanionEndpoint | null): boolean {
+  if (!endpoint?.companionPid) {
+    return false;
+  }
+
+  if (isPidAlive(endpoint.companionPid)) {
+    return true;
+  }
+
+  clearLocalCompanionOccupancy(endpoint.cwd, endpoint.instanceId);
+  return false;
+}
+
 export function buildBackgroundBridgeArgs(
   entryPath: string,
   options: LocalCompanionStartCliOptions,
@@ -273,39 +384,57 @@ async function waitForEndpoint(
   );
 }
 
-async function ensureBridgeReady(options: LocalCompanionStartCliOptions): Promise<void> {
+async function ensureBridgeReady(
+  options: LocalCompanionStartCliOptions,
+): Promise<EnsureBridgeReadyResult> {
   const lock = readBridgeLockFile();
-  if (lock && isPidAlive(lock.pid)) {
-    if (shouldAutoReclaimBridgeLock(lock)) {
-      await stopExistingBridge(lock, options.adapter);
-      log(options.adapter, `Starting replacement bridge in background for ${options.cwd}...`);
-      startBridgeInBackground(options);
+  const lockIsAlive = Boolean(lock && isPidAlive(lock.pid));
+  const endpoint = await readUsableEndpoint(options.cwd, options.adapter);
+  const decision = decideLaunchAction({
+    requestedAdapter: options.adapter,
+    requestedCwd: options.cwd,
+    runningLock: lock,
+    lockIsAlive,
+    lockShouldAutoReclaim: lockIsAlive && lock ? shouldAutoReclaimBridgeLock(lock) : false,
+    endpoint,
+    endpointIsReachable: Boolean(endpoint),
+    companionIsAlive: isCompanionAlive(endpoint),
+  });
+
+  log(options.adapter, decision.message);
+
+  if (decision.kind === "already_active") {
+    return { shouldOpenCompanion: false };
+  }
+
+  if (decision.kind === "open_companion") {
+    if (!endpoint) {
       await waitForEndpoint(options.cwd, options.adapter, options.timeoutMs);
-      return;
+    }
+    return { shouldOpenCompanion: true };
+  }
+
+  if (decision.kind === "switch_workspace") {
+    if (!lock || !lockIsAlive) {
+      throw new Error("Cannot switch workspace because the active bridge lock is missing.");
     }
 
-    if (lock.adapter !== options.adapter || !isSameWorkspaceCwd(lock.cwd, options.cwd)) {
+    try {
       await stopExistingBridge(lock, options.adapter);
-      log(options.adapter, `Starting replacement bridge in background for ${options.cwd}...`);
-      startBridgeInBackground(options);
-      await waitForEndpoint(options.cwd, options.adapter, options.timeoutMs);
-      return;
+    } catch (error) {
+      log(options.adapter, decision.failureMessage);
+      throw error;
     }
 
-    log(options.adapter, `Found running bridge for ${options.cwd}. Waiting for endpoint...`);
+    log(options.adapter, `Starting replacement bridge in background for ${options.cwd}...`);
+    startBridgeInBackground(options);
     await waitForEndpoint(options.cwd, options.adapter, options.timeoutMs);
-    return;
+    return { shouldOpenCompanion: true };
   }
 
-  const existingEndpoint = await readUsableEndpoint(options.cwd, options.adapter);
-  if (existingEndpoint) {
-    log(options.adapter, `Reusing running bridge for ${options.cwd}.`);
-    return;
-  }
-
-  log(options.adapter, `Starting bridge in background for ${options.cwd}...`);
   startBridgeInBackground(options);
   await waitForEndpoint(options.cwd, options.adapter, options.timeoutMs);
+  return { shouldOpenCompanion: true };
 }
 
 async function runCompanion(options: LocalCompanionStartCliOptions): Promise<number> {
@@ -346,7 +475,10 @@ async function main(): Promise<void> {
     throw new Error(`Missing WeChat credentials. Run "bun run setup" first. (${CREDENTIALS_FILE})`);
   }
 
-  await ensureBridgeReady(options);
+  const ready = await ensureBridgeReady(options);
+  if (!ready.shouldOpenCompanion) {
+    process.exit(0);
+  }
   const exitCode = await runCompanion(options);
   process.exit(exitCode);
 }

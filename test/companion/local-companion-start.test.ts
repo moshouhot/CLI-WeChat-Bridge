@@ -3,6 +3,10 @@ import path from "node:path";
 
 import {
   buildBackgroundBridgeArgs,
+  decideLaunchAction,
+  formatAlreadyActiveMessage,
+  formatSwitchFailureMessage,
+  formatSwitchMessage,
   isSameWorkspaceCwd,
   normalizeComparablePath,
   parseCliArgs,
@@ -85,5 +89,107 @@ describe("local-companion-start helpers", () => {
 
   test("isSameWorkspaceCwd matches equivalent directory paths", () => {
     expect(isSameWorkspaceCwd(".", process.cwd())).toBe(true);
+  });
+
+  test("same workspace with live companion is already active", () => {
+    const decision = decideLaunchAction({
+      requestedAdapter: "codex",
+      requestedCwd: "D:/work/project",
+      runningLock: {
+        pid: 123,
+        parentPid: 321,
+        instanceId: "bridge-1",
+        adapter: "codex",
+        command: "codex",
+        cwd: "D:/work/project",
+        startedAt: "2026-03-28T00:00:00.000Z",
+        lifecycle: "companion_bound",
+      },
+      lockIsAlive: true,
+      lockShouldAutoReclaim: false,
+      endpoint: {
+        instanceId: "bridge-1",
+        kind: "codex",
+        port: 8123,
+        token: "token",
+        cwd: "D:/work/project",
+        command: "codex",
+        startedAt: "2026-03-28T00:01:00.000Z",
+        companionPid: 456,
+        companionConnectedAt: "2026-03-28T00:02:00.000Z",
+      },
+      endpointIsReachable: true,
+      companionIsAlive: true,
+    });
+
+    expect(decision).toEqual({
+      kind: "already_active",
+      message: formatAlreadyActiveMessage("D:/work/project"),
+    });
+  });
+
+  test("same workspace reopens companion when bridge is alive but companion is gone", () => {
+    const decision = decideLaunchAction({
+      requestedAdapter: "codex",
+      requestedCwd: "D:/work/project",
+      runningLock: {
+        pid: 123,
+        parentPid: 321,
+        instanceId: "bridge-1",
+        adapter: "codex",
+        command: "codex",
+        cwd: "D:/work/project",
+        startedAt: "2026-03-28T00:00:00.000Z",
+        lifecycle: "companion_bound",
+      },
+      lockIsAlive: true,
+      lockShouldAutoReclaim: false,
+      endpoint: {
+        instanceId: "bridge-1",
+        kind: "codex",
+        port: 8123,
+        token: "token",
+        cwd: "D:/work/project",
+        command: "codex",
+        startedAt: "2026-03-28T00:01:00.000Z",
+      },
+      endpointIsReachable: true,
+      companionIsAlive: false,
+    });
+
+    expect(decision).toEqual({
+      kind: "open_companion",
+      message: "Found running bridge for D:/work/project. Opening companion...",
+    });
+  });
+
+  test("different workspace requests an explicit switch", () => {
+    const decision = decideLaunchAction({
+      requestedAdapter: "codex",
+      requestedCwd: "D:/work/project-b",
+      runningLock: {
+        pid: 123,
+        parentPid: 321,
+        instanceId: "bridge-1",
+        adapter: "codex",
+        command: "codex",
+        cwd: "D:/work/project-a",
+        startedAt: "2026-03-28T00:00:00.000Z",
+        lifecycle: "companion_bound",
+      },
+      lockIsAlive: true,
+      lockShouldAutoReclaim: false,
+      endpoint: null,
+      endpointIsReachable: false,
+      companionIsAlive: false,
+    });
+
+    expect(decision).toEqual({
+      kind: "switch_workspace",
+      fromCwd: "D:/work/project-a",
+      toCwd: "D:/work/project-b",
+      message: formatSwitchMessage("D:/work/project-a", "D:/work/project-b"),
+      failureMessage: formatSwitchFailureMessage("D:/work/project-a"),
+    });
   });
 });
