@@ -35,6 +35,8 @@ export type LocalCompanionEndpoint = {
   sharedThreadId?: string;
   resumeConversationId?: string;
   transcriptPath?: string;
+  companionPid?: number;
+  companionConnectedAt?: string;
   startedAt: string;
 };
 
@@ -116,6 +118,9 @@ function normalizeEndpoint(value: unknown): LocalCompanionEndpoint | null {
       typeof record.resumeConversationId === "string" ? record.resumeConversationId : undefined,
     transcriptPath:
       typeof record.transcriptPath === "string" ? record.transcriptPath : undefined,
+    companionPid: typeof record.companionPid === "number" ? record.companionPid : undefined,
+    companionConnectedAt:
+      typeof record.companionConnectedAt === "string" ? record.companionConnectedAt : undefined,
     startedAt: record.startedAt,
   };
 }
@@ -165,6 +170,57 @@ export function clearLocalCompanionEndpoint(cwd: string, instanceId?: string): v
     if (!endpoint || endpoint.instanceId === instanceId) {
       fs.rmSync(endpointFile, { force: true });
     }
+  } catch {
+    // Best effort cleanup.
+  }
+}
+
+export function clearLocalCompanionOccupancy(cwd: string, instanceId?: string): void {
+  try {
+    const endpoint = readLocalCompanionEndpoint(cwd);
+    if (!endpoint) {
+      return;
+    }
+
+    if (instanceId && endpoint.instanceId !== instanceId) {
+      return;
+    }
+
+    const nextEndpoint: LocalCompanionEndpoint = {
+      ...endpoint,
+      companionPid: undefined,
+      companionConnectedAt: undefined,
+    };
+
+    writeLocalCompanionEndpoint(nextEndpoint);
+  } catch {
+    // Best effort cleanup.
+  }
+}
+
+export function updateLocalCompanionOccupancy(
+  cwd: string,
+  patch: {
+    companionPid?: number;
+    companionConnectedAt?: string;
+  },
+  instanceId?: string,
+): void {
+  try {
+    const endpoint = readLocalCompanionEndpoint(cwd);
+    if (!endpoint) {
+      return;
+    }
+
+    if (instanceId && endpoint.instanceId !== instanceId) {
+      return;
+    }
+
+    writeLocalCompanionEndpoint({
+      ...endpoint,
+      companionPid: patch.companionPid,
+      companionConnectedAt: patch.companionConnectedAt,
+    });
   } catch {
     // Best effort cleanup.
   }
